@@ -85,6 +85,50 @@ fn remove() {
     assert!(s.is_empty());
 }
 
+#[test]
+fn remove_if() {
+    let insert = [0, 4, 2, 12, 8, 7, 11, 5];
+    let not_present = [1, 3, 6, 9, 10];
+    let remove = [2, 12, 8];
+    let remaining = [0, 4, 5, 7, 11];
+
+    fn true_f(k: &i32, v: &i32) -> bool {
+        k * 10 == *v
+    }
+    fn false_f(k: &i32, v: &i32) -> bool {
+        k == v
+    }
+
+    let s = SkipMap::new();
+
+    for &x in &insert {
+        s.insert(x, x * 10);
+    }
+    for x in &not_present {
+        assert!(s.remove_if(x, false_f).is_none());
+        assert!(s.remove_if(x, true_f).is_none());
+    }
+    for x in &remove {
+        assert!(s.remove_if(x, false_f).is_some());
+        assert!(s.remove_if(x, true_f).is_some());
+    }
+
+    let mut v = vec![];
+    let mut e = s.front().unwrap();
+    loop {
+        v.push(*e.key());
+        if !e.move_next() {
+            break;
+        }
+    }
+
+    assert_eq!(v, remaining);
+    for x in &insert {
+        s.remove_if(x, true_f);
+    }
+    assert!(s.is_empty());
+}
+
 // https://github.com/crossbeam-rs/crossbeam/issues/672
 #[test]
 fn concurrent_insert() {
@@ -115,6 +159,29 @@ fn concurrent_remove() {
             s.spawn(|_| {
                 barrier.wait();
                 set.remove(&1);
+            });
+            s.spawn(|_| {
+                barrier.wait();
+                set.remove(&1);
+            });
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn concurrent_remove_if() {
+    for _ in 0..100 {
+        let set: SkipMap<i32, i32> = iter::once((1, 1)).collect();
+        let barrier = Barrier::new(3);
+        thread::scope(|s| {
+            s.spawn(|_| {
+                barrier.wait();
+                set.remove_if(&1, |_k, v| *v == 1);
+            });
+            s.spawn(|_| {
+                barrier.wait();
+                set.remove_if(&1, |_k, v| *v != 1);
             });
             s.spawn(|_| {
                 barrier.wait();

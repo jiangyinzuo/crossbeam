@@ -402,6 +402,37 @@ where
         self.inner.remove(key, guard).map(Entry::new)
     }
 
+    /// Removes an entry with the specified `key` from the map and returns it
+    /// if the provided conditional function `f` returns true.
+    ///
+    /// The value will not actually be dropped until all references to it have gone
+    /// out of scope.
+    ///
+    /// This function returns an [`Entry`] which
+    /// can be used to access the removed key's associated value.
+    ///
+    /// # Example
+    /// ```
+    /// use crossbeam_skiplist::SkipMap;
+    ///
+    /// let map: SkipMap<&str, &str> = SkipMap::new();
+    /// map.insert("key", "value");
+    /// 
+    /// assert_eq!(*map.remove_if("key", |k, v| { v == &"value2" }).unwrap().value(), "value");
+    /// assert!(map.get("key").is_some());
+    /// 
+    /// assert_eq!(*map.remove_if("key", |k, v| { v == &"value" }).unwrap().value(), "value");
+    /// assert!(map.get("key").is_none());
+    /// ```
+    pub fn remove_if<Q>(&self, key: &Q, f: impl FnOnce(&K, &V) -> bool) -> Option<Entry<'_, K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let guard = &epoch::pin();
+        self.inner.remove_if(key, f, guard).map(Entry::new)
+    }
+
     /// Removes the entry with the lowest key
     /// from the map. Returns the removed entry.
     ///

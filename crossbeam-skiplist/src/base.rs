@@ -1114,38 +1114,90 @@ where
 
                 // Try removing the node by marking its tower.
                 if n.mark_tower() {
-                    // Success! Decrement `len`.
-                    self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
-
-                    // Unlink the node at each level of the skip list. We could do this by simply
-                    // repeating the search, but it's usually faster to unlink it manually using
-                    // the `left` and `right` lists.
-                    for level in (0..n.height()).rev() {
-                        // TODO(Amanieu): can we use relaxed ordering here?
-                        let succ = n.tower[level].load(Ordering::SeqCst, guard).with_tag(0);
-
-                        // Try linking the predecessor and successor at this level.
-                        // TODO(Amanieu): can we use release ordering here?
-                        if search.left[level][level]
-                            .compare_exchange(
-                                Shared::from(n as *const _),
-                                succ,
-                                Ordering::SeqCst,
-                                Ordering::SeqCst,
-                                guard,
-                            )
-                            .is_ok()
-                        {
-                            // Success! Decrement the reference count.
-                            n.decrement(guard);
-                        } else {
-                            // Failed! Just repeat the search to completely unlink the node.
-                            self.search_bound(Bound::Included(key), false, guard);
-                            break;
-                        }
-                    }
+                    self.do_remove(search, n, key, guard);
                 }
                 return Some(entry);
+            }
+        }
+    }
+
+    /// Removes an entry with the specified `key` from the map and returns it
+    /// if the provided conditional function `f` returns true.
+    pub fn remove_if<Q>(
+        &self,
+        key: &Q,
+        f: impl FnOnce(&K, &V) -> bool,
+        guard: &Guard,
+    ) -> Option<RefEntry<'_, K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.check_guard(guard);
+
+        unsafe {
+            // Rebind the guard to the lifetime of self. This is a bit of a
+            // hack but it allows us to return references that are not bound to
+            // the lifetime of the guard.
+            let guard = &*(guard as *const _);
+
+            loop {
+                // Try searching for the key.
+                let search = self.search_position(key, guard);
+
+                let n = search.found?;
+
+                // First try incrementing the reference count because we have to return the node as
+                // an entry. If this fails, repeat the search.
+                let entry = match RefEntry::try_acquire(self, n) {
+                    Some(e) => e,
+                    None => continue,
+                };
+
+                // Try removing the node by marking its tower.
+                if f(entry.key(), entry.value()) && n.mark_tower() {
+                    self.do_remove(search, n, key, guard);
+                }
+                return Some(entry);
+            }
+        }
+    }
+
+    fn do_remove<Q>(&self, search: Position<K, V>, n: &Node<K, V>, key: &Q, guard: &Guard)
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        // Success! Decrement `len`.
+        self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
+
+        // Unlink the node at each level of the skip list. We could do this by simply
+        // repeating the search, but it's usually faster to unlink it manually using
+        // the `left` and `right` lists.
+        for level in (0..n.height()).rev() {
+            // TODO(Amanieu): can we use relaxed ordering here?
+            let succ = n.tower[level].load(Ordering::SeqCst, guard).with_tag(0);
+
+            // Try linking the predecessor and successor at this level.
+            // TODO(Amanieu): can we use release ordering here?
+            if search.left[level][level]
+                .compare_exchange(
+                    Shared::from(n as *const _),
+                    succ,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    guard,
+                )
+                .is_ok()
+            {
+                // Success! Decrement the reference count.
+                unsafe {
+                    n.decrement(guard);
+                }
+            } else {
+                // Failed! Just repeat the search to completely unlink the node.
+                self.search_bound(Bound::Included(key), false, guard);
+                break;
             }
         }
     }
